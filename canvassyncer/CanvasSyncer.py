@@ -9,6 +9,7 @@ from AsyncSemClient import AsyncSemClient
 
 PAGES_PER_TIME = 8
 
+FIND_COURSE_RETRY_TIMES = 3
 
 class CanvasSyncer:
     def __init__(self, config):
@@ -77,6 +78,20 @@ class CanvasSyncer:
             )
         )
 
+    # def ifCourseCodeExists(self, code, lookUpList):
+    #     for course in lookUpList:
+    #         if course in code:
+    #             return (True, course)
+    #     return False
+
+    def formatSJTUSyleCourseCode(self, courseCode):
+        pattern = r"[a-z]+[0-9]+"
+        match = re.findall(pattern, courseCode)
+        if match:
+            return match[0]
+        else:
+            return courseCode
+
     async def getCourseIdByCourseCodeHelper(self, page, lowerCourseCodes):
         res = {}
         url = f"{self.baseUrl}/courses?page={page}"
@@ -86,11 +101,14 @@ class CanvasSyncer:
         if not courses:
             return res
         for course in courses:
-            if course.get("course_code", "").lower() in lowerCourseCodes:
-                res[course["id"]] = course["course_code"]
-                lowerCourseCodes.remove(course.get("course_code", "").lower())
+            unformattedCourseCode = course.get("course_code", "").lower()
+            courseCode = self.formatSJTUSyleCourseCode(unformattedCourseCode)
+            if courseCode in lowerCourseCodes:
+                lowerCourseCodes.remove(courseCode)
+                courseCode = courseCode.upper()
+                res[course["id"]] = courseCode
                 print(
-                    f"\t Get course ID: {course['id']} from course code: {course['course_code']}"
+                    f"\t Get course ID: {course['id']} from course code: {courseCode}"
                 )
             # else:
             # print(f"\t Discard course code: {course['course_code']}")
@@ -110,7 +128,9 @@ class CanvasSyncer:
         if clientRes.get("course_code") is None:
             print(f"\t Cannot get course code from course ID: {courseID}")
             return
-        self.courseCode[int(courseID)] = clientRes["course_code"]
+        self.courseCode[int(courseID)] = self.formatSJTUSyleCourseCode(
+            clientRes["course_code"]
+        )
         print(
             f"\t Get course code: {clientRes['course_code']} from course ID: {courseID}"
         )
@@ -127,7 +147,6 @@ class CanvasSyncer:
         parent_dir = os.path.dirname(path)
         truncated_parent = parent_dir[:max_length - len(base_name) - 4] + "..."
         return os.path.join(truncated_parent, base_name)
-
 
     # TODO fix the issue of too long path, need unify the path
     def scanLocalFiles(self, courseID, folders):
@@ -147,14 +166,13 @@ class CanvasSyncer:
                 try:
                     os.makedirs(path)
                 # except FileNotFoundError as e:
-                    # try:
-                        # path = self.shorten_path(path)
-                        # os.makedirs(path)
-                    # except Exception as e:
-                        # print(f"Error: {e}")
+                # try:
+                # path = self.shorten_path(path)
+                # os.makedirs(path)
+                # except Exception as e:
+                # print(f"Error: {e}")
                 except Exception as e:
                     print(f"Error: {e}")
-                    
 
             for f in os.listdir(path):
                 if not os.path.isdir(os.path.join(path, f)):
@@ -215,8 +233,9 @@ class CanvasSyncer:
             path = path.replace("\\", "/").replace("//", "/")
             dt = datetime.strptime(f["modified_at"], "%Y-%m-%dT%H:%M:%SZ")
             modifiedTimeStamp = int(dt.replace(tzinfo=timezone.utc).timestamp())
-            response = await self.client.head(f["url"])
-            file_size = int(response.get("content-length", 0))
+            # response = await self.client.head(f["url"])
+            # file_size = int(response.get("content-length", 0))
+            file_size = int(f["size"])
             files[path] = {
                 "url": f["url"],
                 "modified_time": int(modifiedTimeStamp),
@@ -364,7 +383,7 @@ class CanvasSyncer:
             self.config.get("courseIDs", [])
         )
         print("Getting course IDs...")
-        while times < 5:
+        while times < FIND_COURSE_RETRY_TIMES:
             await self.getCourseID()
             if len(self.courseCode) == total_course_number:
                 break
