@@ -8,8 +8,10 @@ from AsyncSemClient import AsyncSemClient
 
 
 PAGES_PER_TIME = 8
-
 FIND_COURSE_RETRY_TIMES = 3
+WINDOWS_PATH_MAX_LENGTH = 260
+PATH_LENGTH_TOLERANCE = 10
+
 
 class CanvasSyncer:
     def __init__(self, config):
@@ -136,16 +138,16 @@ class CanvasSyncer:
         )
 
     # TODO check validity of the func
-    def pathTooLong(self, path, max_length=260):
-        return len(path) > max_length - len(self.downloadDir) - 10
+    def pathTooLong(self, path, max_length=WINDOWS_PATH_MAX_LENGTH):
+        return len(path) > max_length - len(self.downloadDir) - PATH_LENGTH_TOLERANCE
 
     # TODO check validity of the func
-    def shorten_path(self, path, max_length=260):
+    def shorten_path(self, path, max_length=WINDOWS_PATH_MAX_LENGTH):
         if not self.pathTooLong(path, max_length):
             return path
         base_name = os.path.basename(path)
         parent_dir = os.path.dirname(path)
-        truncated_parent = parent_dir[:max_length - len(base_name) - 4] + "..."
+        truncated_parent = parent_dir[:max_length - len(base_name) - PATH_LENGTH_TOLERANCE] + ".../"
         return os.path.join(truncated_parent, base_name)
 
     # TODO fix the issue of too long path, need unify the path
@@ -185,7 +187,7 @@ class CanvasSyncer:
                     localFiles[relative_file_path] = {
                         "name": f,
                         "size": os.path.getsize(full_file_path),
-                        "modified_time": int(os.path.getctime(full_file_path)),
+                        "modified_time": int(os.path.getmtime(full_file_path)),
                     }
         return localFiles
 
@@ -231,6 +233,9 @@ class CanvasSyncer:
             f["display_name"] = re.sub(r"[\/\\\:\*\?\"\<\>\|]", "_", f["display_name"])
             path = f"{folders[f['folder_id']]}/{f['display_name']}"
             path = path.replace("\\", "/").replace("//", "/")
+            if f["locked_for_user"]:
+                print(f"{self.courseCode[courseID]}{path} is locked: {f["lock_explanation"]}")
+                continue
             dt = datetime.strptime(f["modified_at"], "%Y-%m-%dT%H:%M:%SZ")
             modifiedTimeStamp = int(dt.replace(tzinfo=timezone.utc).timestamp())
             # response = await self.client.head(f["url"])
@@ -252,7 +257,7 @@ class CanvasSyncer:
             for f in self.skipFiles:
                 print(f)
         if self.newFiles:
-            print(f"Start to download {len(self.newInfo)} file(s)!")
+            print(f"Ready to download {len(self.newInfo)} file(s).")
             for s in self.newInfo:
                 print(s)
 
@@ -277,6 +282,7 @@ class CanvasSyncer:
         while isDownload.lower() not in ["y", "n"]:
             isDownload = input("Please input 'y' or 'n': ")
         if isDownload.lower() == "n":
+            self.laterFiles.clear()
             return
         # Remove local files with older version
         for courseID in self.laterFiles:
@@ -288,12 +294,16 @@ class CanvasSyncer:
                     .replace("\\", "/")
                     .replace("//", "/")
                 )
+                # TODO change local_created_time to readable time format
                 local_created_time = int(os.path.getctime(abs_file_path))
                 try:
                     newPath = os.path.join(
                         os.path.dirname(abs_file_path),
                         f"{local_created_time}_{os.path.basename(abs_file_path)}",
                     )
+                    # TODO change overall option of keep_older_version to control each file;
+                    # if local ctime = local mtime, no manual change, follow keep_older_version
+                    # if local ctime < local mtime, manual change, force backu local
                     if not self.config["keep_older_version"]:
                         os.remove(abs_file_path)
                     elif not os.path.exists(newPath):
@@ -370,8 +380,10 @@ class CanvasSyncer:
         for courseID in self.newFiles:
             if courseID not in self.downloadList:
                 self.downloadList[courseID] = {}
-            self.downloadList[courseID].update(self.newFiles[courseID])
-            self.downloadList[courseID].update(self.laterFiles[courseID])
+            if self.newFiles:
+                self.downloadList[courseID].update(self.newFiles[courseID])
+            if self.laterFiles:
+                self.downloadList[courseID].update(self.laterFiles[courseID])
         for courseID in self.downloadList:
             for file_info in self.downloadList[courseID].values():
                 self.downloadSize += file_info["size"]
@@ -407,7 +419,7 @@ class CanvasSyncer:
                 courseID, self.folders[courseID]
             )
 
-        print(f"Found {self.countFiles(self.onlineFiles)} files on canvas.")
+        print(f"Found {self.countFiles(self.onlineFiles)} downloadable files.\n")
 
         # Check file size
         self.checkFileSize()
