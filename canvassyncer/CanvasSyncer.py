@@ -79,6 +79,9 @@ class CanvasSyncer:
                 self.getCourseIdByCourseCodeHelper, lowerCourseCodes
             )
         )
+        if lowerCourseCodes:
+            for courseCode in lowerCourseCodes:
+                print(f"\t Cannot find course ID for course: {courseCode}")
 
     # def ifCourseCodeExists(self, code, lookUpList):
     #     for course in lookUpList:
@@ -113,7 +116,7 @@ class CanvasSyncer:
                     f"\t Get course ID: {course['id']} from course code: {courseCode}"
                 )
             # else:
-            # print(f"\t Discard course code: {course['course_code']}")
+            # print(f"\t No course has this code: {course['course_code']}")
         return res
 
     async def getCourseCodeByCourseID(self):
@@ -147,7 +150,9 @@ class CanvasSyncer:
             return path
         base_name = os.path.basename(path)
         parent_dir = os.path.dirname(path)
-        truncated_parent = parent_dir[:max_length - len(base_name) - PATH_LENGTH_TOLERANCE] + ".../"
+        truncated_parent = (
+            parent_dir[: max_length - len(base_name) - PATH_LENGTH_TOLERANCE] + ".../"
+        )
         return os.path.join(truncated_parent, base_name)
 
     # TODO fix the issue of too long path, need unify the path
@@ -234,7 +239,9 @@ class CanvasSyncer:
             path = f"{folders[f['folder_id']]}/{f['display_name']}"
             path = path.replace("\\", "/").replace("//", "/")
             if f["locked_for_user"]:
-                print(f"{self.courseCode[courseID]}{path} is locked: {f["lock_explanation"]}")
+                print(
+                    f"\t {self.courseCode[courseID]}{path} is locked: {f["lock_explanation"]}"
+                )
                 continue
             dt = datetime.strptime(f["modified_at"], "%Y-%m-%dT%H:%M:%SZ")
             modifiedTimeStamp = int(dt.replace(tzinfo=timezone.utc).timestamp())
@@ -349,7 +356,7 @@ class CanvasSyncer:
             if courseID not in self.newFiles:
                 self.newFiles[courseID] = {}
             for file_name, file_info in self.onlineFiles[courseID].items():
-                if not self.localFiles[courseID]: 
+                if not self.localFiles[courseID]:
                     self.newFiles[courseID][file_name] = file_info
                 else:
                     if file_name in self.localFiles[courseID]:
@@ -395,13 +402,25 @@ class CanvasSyncer:
             self.config.get("courseIDs", [])
         )
         print("Getting course IDs...")
-        while times < FIND_COURSE_RETRY_TIMES:
+        all_found = False
+        while times < FIND_COURSE_RETRY_TIMES-1:
             await self.getCourseID()
             if len(self.courseCode) == total_course_number:
+                all_found = True
                 break
             else:
                 print("Number of available courses doesn't match, retrying...")
             times += 1
+        if not all_found:
+            await self.getCourseID()
+            if len(self.courseCode) == total_course_number:
+                all_found = True
+        if not all_found:
+            print("Failed to get all course. Check your course code or course ID format.")
+            isContinue = "Y" if self.config["y"] else input("\t Continue?(y/n) ")
+            if isContinue.lower() == "n":
+                exit()
+
         print(f"Get {len(self.courseCode)} available courses.\n")
 
         # Get files
@@ -419,7 +438,7 @@ class CanvasSyncer:
                 courseID, self.folders[courseID]
             )
 
-        print(f"Found {self.countFiles(self.onlineFiles)} downloadable files.\n")
+        print(f"Found {self.countFiles(self.onlineFiles)} downloadable files.\n\nPreparing to sync...")
 
         # Check file size
         self.checkFileSize()
@@ -428,7 +447,7 @@ class CanvasSyncer:
         self.checkLaterFiles()
         self.prepareDownload()
 
-        if not self.downloadList:
+        if not self.downloadSize:
             return print("All local files are synced!")
         else:
             print(f"Prepare to download {self.countFiles(self.downloadList)} files.")

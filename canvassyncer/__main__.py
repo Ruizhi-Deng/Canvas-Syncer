@@ -54,7 +54,7 @@ def initConfig():
     )
     token = promptConfigStr("Canvas access token", "token")
     courseCodesStr = promptConfigStr(
-        "Courses to sync in course codes(split with space)", "courseCodes"
+        "Courses to sync in course codes(split with space). Use new 4-digit code format, ignore lagging J.", "courseCodes"
     )
     courseCodes = courseCodesStr.split()
     courseIDsStr = promptConfigStr(
@@ -78,6 +78,9 @@ def initConfig():
     allowImage = promptConfigStr(
         "Whether allow downloading images", "allowImage", defaultValOnMissing=True
     )
+    keep_old_version = promptConfigStr(
+        "Whether keep older version", "keepOlderVersion", defaultValOnMissing=True
+    )
 
     try:
         filesizeThresh = float(filesizeThreshStr)
@@ -86,6 +89,7 @@ def initConfig():
     allowAudio = (allowAudio == "True") or (allowAudio == "true")
     allowVideo = (allowVideo == "True") or (allowVideo == "true")
     allowImage = (allowImage == "True") or (allowImage == "true")
+    keepOlderVersion = (keep_old_version == "True") or (keep_old_version == "true")
     return {
         "canvasURL": url,
         "token": token,
@@ -96,6 +100,7 @@ def initConfig():
         "allowAudio": allowAudio,
         "allowVideo": allowVideo,
         "allowImage": allowImage,
+        "keep_older_version": keepOlderVersion
     }
 
 
