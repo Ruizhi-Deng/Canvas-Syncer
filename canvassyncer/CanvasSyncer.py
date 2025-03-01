@@ -365,11 +365,11 @@ class CanvasSyncer:
                             > self.localFiles[courseID][file_name]["modified_time"]
                         ):
                             self.laterFiles[courseID][file_name] = file_info
-                        else:
-                            pass
-                            # print(
-                            # f"{self.courseCode[courseID]}{file_name} has newer local version. Removed from download list."
-                            # )
+                        # else:
+                        #     pass
+                        #     # print(
+                        #     # f"{self.courseCode[courseID]}{file_name} has newer local version. Removed from download list."
+                        #     # )
                     else:
                         self.newFiles[courseID][file_name] = file_info
 
@@ -382,6 +382,11 @@ class CanvasSyncer:
                 if file_info["size"] > self.config["filesizeThresh"] * 1024 * 1024:
                     self.overSizedFiles[courseID][file_name] = file_info
                     self.onlineFiles[courseID].pop(file_name)
+            for file_name, file_info in self.overSizedFiles[courseID].items():
+                print(
+                    f"File too large: {self.courseCode[courseID]}{file_name} ({file_info['size'] / 1024 / 1024:.2f} MB)"
+                )
+        print("")
 
     def prepareDownload(self):
         for courseID in self.newFiles:
@@ -403,7 +408,7 @@ class CanvasSyncer:
         )
         print("Getting course IDs...")
         all_found = False
-        while times < FIND_COURSE_RETRY_TIMES-1:
+        while times < FIND_COURSE_RETRY_TIMES - 1:
             await self.getCourseID()
             if len(self.courseCode) == total_course_number:
                 all_found = True
@@ -416,7 +421,9 @@ class CanvasSyncer:
             if len(self.courseCode) == total_course_number:
                 all_found = True
         if not all_found:
-            print("Failed to get all course. Check your course code or course ID format.")
+            print(
+                "Failed to get all course. Check your course code or course ID format."
+            )
             isContinue = "Y" if self.config["y"] else input("\t Continue?(y/n) ")
             if isContinue.lower() == "n":
                 exit()
@@ -438,7 +445,9 @@ class CanvasSyncer:
                 courseID, self.folders[courseID]
             )
 
-        print(f"Found {self.countFiles(self.onlineFiles)} downloadable files.\n\nPreparing to sync...")
+        print(
+            f"Found {self.countFiles(self.onlineFiles)} downloadable files.\n\nPreparing to sync..."
+        )
 
         # Check file size
         self.checkFileSize()
@@ -450,10 +459,14 @@ class CanvasSyncer:
         if not self.downloadSize:
             return print("All local files are synced!")
         else:
-            print(f"Prepare to download {self.countFiles(self.downloadList)} files.")
+            print(f"Prepare to download {self.countFiles(self.downloadList)} files:")
+            for courseID in self.downloadList:
+                if self.downloadList[courseID]:
+                    for files in self.downloadList[courseID]:
+                        print(f"\t{self.courseCode[courseID]}{files}")
             await self.client.downloadMany(
                 self.downloadDir, self.downloadList, self.downloadSize, self.courseCode
             )
             print("Sync completed!")
-
+        
         return
