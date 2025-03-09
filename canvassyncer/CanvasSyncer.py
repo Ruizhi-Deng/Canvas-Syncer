@@ -6,6 +6,10 @@ from datetime import datetime, timezone
 
 from AsyncSemClient import AsyncSemClient
 
+import pywintypes
+import win32file
+import win32con
+
 
 PAGES_PER_TIME = 8
 FIND_COURSE_RETRY_TIMES = 3
@@ -320,7 +324,7 @@ class CanvasSyncer:
                     )
                     newPath = os.path.join(
                         os.path.dirname(abs_file_path),
-                        f"{file_name}_{datetime.fromtimestamp(local_modified_time).strftime('%Y%m%d%h%m')}{file_ext}",
+                        f"{file_name}_{datetime.fromtimestamp(local_modified_time).strftime('%Y%m%d_%H%M')}{file_ext}",
                     )
                     if local_created_time == local_modified_time:
                         # 说明文件没有被修改过
@@ -414,6 +418,40 @@ class CanvasSyncer:
             for file_info in self.downloadList[courseID].values():
                 self.downloadSize += file_info["size"]
 
+    # 把从laterFiles中下载的文件的创建时间改为在线文件的创建时间
+    def changeLaterFilesCTime(self):
+        for courseID in self.laterFiles:
+            if self.laterFiles[courseID]:
+                for file_name, file_info in self.laterFiles[courseID].items():
+                    abs_file_path = (
+                        os.path.join(
+                            self.downloadDir,
+                            f"{self.courseCode[courseID]}{file_name}",
+                        )
+                        .replace("\\", "/")
+                        .replace("//", "/")
+                    )
+                    try:
+                        # 修改文件的创建时间和修改时间
+                        handle = win32file.CreateFile(
+                            abs_file_path,
+                            win32con.GENERIC_WRITE,
+                            0,
+                            None,
+                            win32con.OPEN_EXISTING,
+                            win32con.FILE_ATTRIBUTE_NORMAL,
+                            None,
+                        )
+                        new_time = pywintypes.Time(file_info["modified_time"])
+                        win32file.SetFileTime(handle, new_time, None, None)
+                        handle.close()
+                        os.utime(
+                            abs_file_path,
+                            (file_info["modified_time"], file_info["modified_time"]),
+                        )
+                    except Exception as e:
+                        print(f"Error: {e}")
+
     async def sync(self):
         # Get course IDs
         times = 0
@@ -481,6 +519,8 @@ class CanvasSyncer:
             await self.client.downloadMany(
                 self.downloadDir, self.downloadList, self.downloadSize, self.courseCode
             )
+            self.changeLaterFilesCTime()
+
             print("Sync completed!")
 
         return
