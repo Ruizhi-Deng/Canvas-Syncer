@@ -193,6 +193,11 @@ class CanvasSyncer:
                         "name": f,
                         "size": os.path.getsize(full_file_path),
                         "modified_time": int(os.path.getmtime(full_file_path)),
+                        "created_time": int(os.path.getctime(full_file_path)),
+                        "is_modified": bool(
+                            os.path.getmtime(full_file_path)
+                            > os.path.getctime(full_file_path)
+                        ),
                     }
         return localFiles
 
@@ -268,7 +273,7 @@ class CanvasSyncer:
             for s in self.newInfo:
                 print(s)
 
-    def checkLaterFiles(self):
+    def compareExistingFiles(self):
         if not self.laterFiles:
             return
         else:
@@ -285,10 +290,10 @@ class CanvasSyncer:
                 print(
                     f"\t{self.courseCode[courseID]}{fileName} (Modified at: {datetime.fromtimestamp(file_info['modified_time']).strftime('%Y-%m-%d %H:%M:%S')})"
                 )
-        isDownload = "Y" if self.config["y"] else input("Update all?(y/n) ")
-        while isDownload.lower() not in ["y", "n"]:
-            isDownload = input("Please input 'y' or 'n': ")
-        if isDownload.lower() == "n":
+        isUpdate = "Y" if self.config["y"] else input("Update all?(y/n) ")
+        while isUpdate.lower() not in ["y", "n"]:
+            isUpdate = input("Please input 'y' or 'n': ")
+        if isUpdate.lower() == "n":
             self.laterFiles.clear()
             return
         # Remove local files with older version
@@ -303,24 +308,30 @@ class CanvasSyncer:
                 )
                 # TODO change local_created_time to readable time format
                 local_created_time = int(os.path.getctime(abs_file_path))
+                local_modified_time = int(os.path.getmtime(abs_file_path))
                 try:
-                    newPath = os.path.join(
-                        os.path.dirname(abs_file_path),
-                        f"{local_created_time}_{os.path.basename(abs_file_path)}",
-                    )
                     # TODO change overall option of keep_older_version to control each file;
                     # if local ctime = local mtime, no manual change, follow keep_older_version
-                    # if local ctime < local mtime, manual change, force backu local
-                    if not self.config["keep_older_version"]:
-                        os.remove(abs_file_path)
-                    elif not os.path.exists(newPath):
+                    # if local ctime < local mtime, manual change, force backup local
+                    # BUG bad logic
+                    # 获取文件名和扩展名
+                    file_name, file_ext = os.path.splitext(
+                        os.path.basename(abs_file_path)
+                    )
+                    newPath = os.path.join(
+                        os.path.dirname(abs_file_path),
+                        f"{file_name}_{datetime.fromtimestamp(local_modified_time).strftime('%Y%m%d%h%m')}{file_ext}",
+                    )
+                    if local_created_time == local_modified_time:
+                        # 说明文件没有被修改过
+                        if self.config["keep_older_version"]:
+                            os.rename(abs_file_path, newPath)
+                        else:
+                            os.remove(abs_file_path)
+                    if local_created_time < local_modified_time:
+                        # 说明文件被修改过，强制备份
                         os.rename(abs_file_path, newPath)
-                    else:
-                        pass
-                        # abs_file_path = os.path.join(
-                        #     os.path.dirname(abs_file_path),
-                        #     f"{int(time.time())}_{os.path.basename(abs_file_path)}",
-                        # )
+
                 except Exception as e:
                     print(f"\t [{e.__class__.__name__}] Skipped: {abs_file_path}")
 
@@ -349,29 +360,32 @@ class CanvasSyncer:
                 return False
         return True
 
+    # TODO need to integrade with compareExistingFiles
     def categorizeFiles(self):
         for courseID in self.courseCode:
             if courseID not in self.laterFiles:
                 self.laterFiles[courseID] = {}
             if courseID not in self.newFiles:
                 self.newFiles[courseID] = {}
-            for file_name, file_info in self.onlineFiles[courseID].items():
+            for file_name, online_file_info in self.onlineFiles[courseID].items():
                 if not self.localFiles[courseID]:
-                    self.newFiles[courseID][file_name] = file_info
+                    self.newFiles[courseID][file_name] = online_file_info
                 else:
                     if file_name in self.localFiles[courseID]:
+                        # TODO logic changed, move comparsion to compareExistingFiles. check validity
                         if (
-                            file_info["modified_time"]
-                            > self.localFiles[courseID][file_name]["modified_time"]
+                            online_file_info["modified_time"]
+                            > self.localFiles[courseID][file_name]["created_time"]
                         ):
-                            self.laterFiles[courseID][file_name] = file_info
+                            self.laterFiles[courseID][file_name] = online_file_info
+                        # self.laterFiles[courseID][file_name] = online_file_info
                         # else:
                         #     pass
                         #     # print(
                         #     # f"{self.courseCode[courseID]}{file_name} has newer local version. Removed from download list."
                         #     # )
                     else:
-                        self.newFiles[courseID][file_name] = file_info
+                        self.newFiles[courseID][file_name] = online_file_info
 
     def checkFileSize(self):
         for courseID in self.courseCode:
@@ -453,7 +467,7 @@ class CanvasSyncer:
         self.checkFileSize()
         self.checkFileType()
         self.categorizeFiles()
-        self.checkLaterFiles()
+        self.compareExistingFiles()
         self.prepareDownload()
 
         if not self.downloadSize:
@@ -468,5 +482,5 @@ class CanvasSyncer:
                 self.downloadDir, self.downloadList, self.downloadSize, self.courseCode
             )
             print("Sync completed!")
-        
+
         return
