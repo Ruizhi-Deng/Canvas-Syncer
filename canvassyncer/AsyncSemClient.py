@@ -14,14 +14,12 @@ class AsyncSemClient:
             timeout=10,
             headers={
                 "Authorization": f"Bearer {token}",
-                # "Authorization": f"Bearer <REMOVED>",
                 # "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36",
             },
             proxy=proxy,
             # proxy=None,
             # transport=httpx.AsyncHTTPTransport(retries=3),
             follow_redirects=True,
-            # verify=False,
         )
 
     async def downloadOne(self, src, dst):
