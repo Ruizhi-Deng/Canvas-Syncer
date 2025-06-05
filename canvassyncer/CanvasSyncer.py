@@ -6,10 +6,6 @@ from datetime import datetime, timezone
 
 from AsyncSemClient import AsyncSemClient
 
-import pywintypes
-import win32file
-import win32con
-
 
 PAGES_PER_TIME = 8
 FIND_COURSE_RETRY_TIMES = 3
@@ -77,6 +73,8 @@ class CanvasSyncer:
     async def getCourseIdByCourseCode(self):
         lowerCourseCodes = []
         for courseCode in self.config["courseCodes"]:
+            if courseCode[-1] == "J" or courseCode[-1] == "j":
+                courseCode = courseCode[:-1]
             lowerCourseCodes.append(courseCode.replace(" ", "").lower())
         self.courseCode.update(
             await self.dictFromPages(
@@ -116,9 +114,7 @@ class CanvasSyncer:
                 lowerCourseCodes.remove(courseCode)
                 courseCode = courseCode.upper()
                 res[course["id"]] = courseCode
-                print(
-                    f"\t Get course ID: {course['id']} from course code: {courseCode}"
-                )
+                print(f"\tGet course ID: {course['id']} from course code: {courseCode}")
             # else:
             # print(f"\t No course has this code: {course['course_code']}")
         return res
@@ -144,11 +140,9 @@ class CanvasSyncer:
             f"\t Get course code: {clientRes['course_code']} from course ID: {courseID}"
         )
 
-    # TODO check validity of the func
     def pathTooLong(self, path, max_length=WINDOWS_PATH_MAX_LENGTH):
         return len(path) > max_length - len(self.downloadDir) - PATH_LENGTH_TOLERANCE
 
-    # TODO check validity of the func
     def shorten_path(self, path, max_length=WINDOWS_PATH_MAX_LENGTH):
         if not self.pathTooLong(path, max_length):
             return path
@@ -159,7 +153,6 @@ class CanvasSyncer:
         )
         return os.path.join(truncated_parent, base_name)
 
-    # TODO fix the issue of too long path, need unify the path
     def scanLocalFiles(self, courseID, folders):
         localFiles = {}
         for folder in folders.values():
@@ -176,12 +169,6 @@ class CanvasSyncer:
             if not os.path.exists(path):
                 try:
                     os.makedirs(path)
-                # except FileNotFoundError as e:
-                # try:
-                # path = self.shorten_path(path)
-                # os.makedirs(path)
-                # except Exception as e:
-                # print(f"Error: {e}")
                 except Exception as e:
                     print(f"Error: {e}")
 
@@ -254,11 +241,17 @@ class CanvasSyncer:
                 continue
             dt = datetime.strptime(f["modified_at"], "%Y-%m-%dT%H:%M:%SZ")
             modifiedTimeStamp = int(dt.replace(tzinfo=timezone.utc).timestamp())
+            createdTimeStamp = int(
+                datetime.strptime(f["created_at"], "%Y-%m-%dT%H:%M:%SZ")
+                .replace(tzinfo=timezone.utc)
+                .timestamp()
+            )
             # response = await self.client.head(f["url"])
             # file_size = int(response.get("content-length", 0))
             file_size = int(f["size"])
             files[path] = {
                 "url": f["url"],
+                "created_time": createdTimeStamp,
                 "modified_time": int(modifiedTimeStamp),
                 "size": file_size,
             }
@@ -281,13 +274,13 @@ class CanvasSyncer:
         if not self.laterFiles:
             return
         else:
+            # Check if there are any files with later version
             for courseID in self.laterFiles:
                 if self.laterFiles[courseID]:
                     break
                 else:
                     return
-        # if not self.laterFiles:
-        #     return
+
         print("\nThese file(s) have later version on canvas:")
         for courseID in self.laterFiles:
             for fileName, file_info in self.laterFiles[courseID].items():
@@ -310,14 +303,15 @@ class CanvasSyncer:
                     .replace("\\", "/")
                     .replace("//", "/")
                 )
-                # TODO change local_created_time to readable time format
+                # [x] TODO change local_created_time to readable time format
                 local_created_time = int(os.path.getctime(abs_file_path))
                 local_modified_time = int(os.path.getmtime(abs_file_path))
                 try:
-                    # TODO change overall option of keep_older_version to control each file;
+                    # [x] TODO change overall option of keep_older_version to control each file;
                     # if local ctime = local mtime, no manual change, follow keep_older_version
                     # if local ctime < local mtime, manual change, force backup local
-                    # BUG bad logic
+                    # [x] TODO use md5 to compare files instald of ctime and mtime; first download then compare and delete;
+                    # or obtain md5 from canvas and compare with local md5 (no, since canvas api doesn't provide md5)
                     # 获取文件名和扩展名
                     file_name, file_ext = os.path.splitext(
                         os.path.basename(abs_file_path)
@@ -332,7 +326,7 @@ class CanvasSyncer:
                             os.rename(abs_file_path, newPath)
                         else:
                             os.remove(abs_file_path)
-                    if local_created_time < local_modified_time:
+                    else:
                         # 说明文件被修改过，强制备份
                         os.rename(abs_file_path, newPath)
 
@@ -371,25 +365,94 @@ class CanvasSyncer:
                 self.laterFiles[courseID] = {}
             if courseID not in self.newFiles:
                 self.newFiles[courseID] = {}
+            lower_local_filenames = [i.lower() for i in self.localFiles[courseID]]
             for file_name, online_file_info in self.onlineFiles[courseID].items():
                 if not self.localFiles[courseID]:
                     self.newFiles[courseID][file_name] = online_file_info
                 else:
-                    if file_name in self.localFiles[courseID]:
-                        # TODO logic changed, move comparsion to compareExistingFiles. check validity
-                        if (
-                            online_file_info["modified_time"]
-                            > self.localFiles[courseID][file_name]["created_time"]
-                        ):
-                            self.laterFiles[courseID][file_name] = online_file_info
-                        # self.laterFiles[courseID][file_name] = online_file_info
-                        # else:
-                        #     pass
-                        #     # print(
-                        #     # f"{self.courseCode[courseID]}{file_name} has newer local version. Removed from download list."
-                        #     # )
+                    # 只有当在线文件的创建时间大于在线文件的修改时间时，才认为在线文件是新文件
+                    # 对于Windows，文件名大小写不敏感，统一换成小写比较
+                    # ??? -> 故当本地文件的创建时间早于在线文件的创建时间时，不会更新（人为创建的本地文件，不要动）<- ???
+                    if os.name == "nt":
+                        if file_name.lower() in lower_local_filenames:
+                            if file_name not in self.localFiles[courseID]:
+                                original_local_file_name = ""
+                                for local_file in self.localFiles[courseID]:
+                                    if local_file.lower() == file_name.lower():
+                                        original_local_file_name = local_file
+                                        break
+                                original_local_file_path = os.path.join(
+                                    self.downloadDir,
+                                    f"{self.courseCode[courseID]}{original_local_file_name}",
+                                ).replace("\\", "/")
+                                done: bool = False
+                                while not done:
+                                    option = input(
+                                        f"{os.path.join(
+                                                    self.downloadDir,
+                                                    f"{self.courseCode[courseID]}{file_name}",
+                                                ).replace("\\", "/")} conflicts with local file {os.path.join(
+                                                    self.downloadDir,
+                                                    f"{self.courseCode[courseID]}{original_local_file_name}",
+                                                ).replace("\\", "/")} as Windows file names are case-insensitive. \nYou might want to rename(r) or delete(d) the local file: "
+                                    )
+                                    if option.lower() == "d":
+                                        try:
+                                            os.rename(
+                                                original_local_file_path,
+                                                original_local_file_path + ".bak",
+                                            )
+                                            self.newFiles[courseID][
+                                                file_name
+                                            ] = online_file_info
+                                            done = True
+                                        except Exception as e:
+                                            print(f"Error: {e}")
+                                            print(
+                                                "Please delete the local file manually."
+                                            )
+                                            exit(-1)
+                                    elif option.lower() == "r":
+                                        new_local_file_path = os.path.join(
+                                            os.path.dirname(original_local_file_path),
+                                            input(
+                                                f"Please input new file name for {os.path.basename(original_local_file_path)}: "
+                                            ),
+                                        ).replace("\\", "/")
+                                        try:
+                                            os.rename(
+                                                original_local_file_path,
+                                                new_local_file_path,
+                                            )
+                                            done = True
+                                            self.newFiles[courseID][
+                                                file_name
+                                            ] = online_file_info
+                                        except Exception as e:
+                                            print(f"Error: {e}")
+                                            print(
+                                                "Please rename the local file manually."
+                                            )
+                                            exit(-1)
+                                    else:
+                                        print("Please input 'r' or 'd'.")
+                                        continue
+                            if (
+                                online_file_info["modified_time"]
+                                > online_file_info["created_time"]
+                            ):
+                                self.laterFiles[courseID][file_name] = online_file_info
+                        else:
+                            self.newFiles[courseID][file_name] = online_file_info
                     else:
-                        self.newFiles[courseID][file_name] = online_file_info
+                        if file_name in self.localFiles[courseID]:
+                            if (
+                                online_file_info["modified_time"]
+                                > online_file_info["created_time"]
+                            ):
+                                self.laterFiles[courseID][file_name] = online_file_info
+                        else:
+                            self.newFiles[courseID][file_name] = online_file_info
 
     def checkFileSize(self):
         for courseID in self.courseCode:
@@ -418,8 +481,51 @@ class CanvasSyncer:
             for file_info in self.downloadList[courseID].values():
                 self.downloadSize += file_info["size"]
 
-    # 把从laterFiles中下载的文件的创建时间改为在线文件的创建时间
+    # 把从laterFiles中下载的文件的创建时间改为在线文件的创建时间 -- only works on windows
     def changeLaterFilesCTime(self):
+        if os.name != "nt":
+            return
+        else:
+            import pywintypes
+            import win32file
+            import win32con
+
+            for courseID in self.laterFiles:
+                if self.laterFiles[courseID]:
+                    for file_name, file_info in self.laterFiles[courseID].items():
+                        abs_file_path = (
+                            os.path.join(
+                                self.downloadDir,
+                                f"{self.courseCode[courseID]}{file_name}",
+                            )
+                            .replace("\\", "/")
+                            .replace("//", "/")
+                        )
+                        try:
+                            # 修改文件的创建时间和修改时间
+                            handle = win32file.CreateFile(
+                                abs_file_path,
+                                win32con.GENERIC_WRITE,
+                                0,
+                                None,
+                                win32con.OPEN_EXISTING,
+                                win32con.FILE_ATTRIBUTE_NORMAL,
+                                None,
+                            )
+                            new_time = pywintypes.Time(file_info["modified_time"])
+                            win32file.SetFileTime(handle, new_time, None, None)
+                            handle.close()
+                            os.utime(
+                                abs_file_path,
+                                (
+                                    file_info["modified_time"],
+                                    file_info["modified_time"],
+                                ),
+                            )
+                        except Exception as e:
+                            print(f"Error: {e}")
+
+    def changeLaterFilesModifiedTime(self):
         for courseID in self.laterFiles:
             if self.laterFiles[courseID]:
                 for file_name, file_info in self.laterFiles[courseID].items():
@@ -432,19 +538,6 @@ class CanvasSyncer:
                         .replace("//", "/")
                     )
                     try:
-                        # 修改文件的创建时间和修改时间
-                        handle = win32file.CreateFile(
-                            abs_file_path,
-                            win32con.GENERIC_WRITE,
-                            0,
-                            None,
-                            win32con.OPEN_EXISTING,
-                            win32con.FILE_ATTRIBUTE_NORMAL,
-                            None,
-                        )
-                        new_time = pywintypes.Time(file_info["modified_time"])
-                        win32file.SetFileTime(handle, new_time, None, None)
-                        handle.close()
                         os.utime(
                             abs_file_path,
                             (file_info["modified_time"], file_info["modified_time"]),
@@ -476,7 +569,7 @@ class CanvasSyncer:
             print(
                 "Failed to get all course. Check your course code or course ID format."
             )
-            isContinue = "Y" if self.config["y"] else input("\t Continue?(y/n) ")
+            isContinue = "Y" if self.config["y"] else input("\t Continue sync?(y/n) ")
             if isContinue.lower() == "n":
                 exit()
 
@@ -519,7 +612,8 @@ class CanvasSyncer:
             await self.client.downloadMany(
                 self.downloadDir, self.downloadList, self.downloadSize, self.courseCode
             )
-            self.changeLaterFilesCTime()
+            if os.name == "nt":
+                self.changeLaterFilesCTime()
 
             print("Sync completed!")
 

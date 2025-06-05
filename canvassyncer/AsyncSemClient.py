@@ -6,15 +6,22 @@ import aiofiles
 import httpx
 from tqdm import tqdm
 
+
 class AsyncSemClient:
     def __init__(self, connectionCount, token, proxy):
         self.sem = asyncio.Semaphore(connectionCount)
         self.client = httpx.AsyncClient(
-            timeout=5,
-            headers={"Authorization": f"Bearer {token}"},
+            timeout=10,
+            headers={
+                "Authorization": f"Bearer {token}",
+                # "Authorization": f"Bearer <REMOVED>",
+                # "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36",
+            },
             proxy=proxy,
-            transport=httpx.AsyncHTTPTransport(retries=3),
+            # proxy=None,
+            # transport=httpx.AsyncHTTPTransport(retries=3),
             follow_redirects=True,
+            # verify=False,
         )
 
     async def downloadOne(self, src, dst):
@@ -32,15 +39,41 @@ class AsyncSemClient:
                                 res.num_bytes_downloaded - num_bytes_downloaded
                             )
                             num_bytes_downloaded = res.num_bytes_downloaded
-                except FileNotFoundError as e:
-                    print("\nFileNotFoundError: Perhaps the file path is too long or invalid. Progress indicator will be inaccurate.")
-                    # os.remove(dst_temp)
-                    return
                 except Exception as e:
-                    print(e.__class__.__name__)
+                    print(
+                        f"\n{e.__class__.__name__}: Fail to download {src} => {dst_temp}."
+                    )
+                    self.failures.append(dst)
                     os.remove(dst_temp)
                     return
-                os.rename(dst_temp, dst)
+                # Rename the temp file to the final destination
+                try:
+                    os.rename(dst_temp, dst)
+                except FileNotFoundError as e:
+                    print(
+                        "\nFileNotFoundError: Perhaps the file path is too long or invalid. Progress indicator will be inaccurate."
+                    )
+                    self.failures.append(dst)
+                    # os.remove(dst_temp)
+                    return
+                except FileExistsError as e:
+                    base, ext = os.path.splitext(dst)
+                    new_name = base + "_online_ver" + ext
+                    print(
+                        f"\nFileExistsError: {dst} already exists. New file will be renamed to {new_name}."
+                    )
+                    if os.path.exists(new_name):
+                        print(f"File {new_name} already exists. Update it.")
+                        os.remove(new_name)
+                        os.rename(dst_temp, new_name)
+                    else:
+                        os.rename(dst_temp, new_name)
+                        
+                except Exception as e:
+                    print(f"\n{e.__class__.__name__}")
+                    os.remove(dst_temp)
+                    self.failures.append(dst)
+                    return
 
     async def downloadMany(
         self, download_dir_root, download_list, download_size, course_code
@@ -65,10 +98,10 @@ class AsyncSemClient:
         if self.failures:
             print(f"Fail to download these {len(self.failures)} file(s):")
             for text in self.failures:
-                print(text)
+                print("\t" + text)
 
     async def json(self, *args, **kwargs):
-        retryTimes = 0
+        retryTimes = 1
         checkError = bool(kwargs.pop("checkError", False))
         debugMode = bool(kwargs.pop("debug", False))
         while retryTimes <= 5:
@@ -92,6 +125,15 @@ class AsyncSemClient:
                     print(f"\nError: {errMsg}")
                     exit(1)
                 return res
+
+            except (httpx.ReadTimeout, httpx.ConnectTimeout) as e:
+                retryTimes += 1
+                waitTime = 5
+                print(f"\nTimeout error: {e}. Retry #{retryTimes}, waiting for {waitTime} seconds...")
+                print(f"Request URL: {args}")
+                print(f"Request parameters: {kwargs}")
+                await asyncio.sleep(waitTime)
+
             except Exception as e:
                 retryTimes += 1
                 if debugMode:
