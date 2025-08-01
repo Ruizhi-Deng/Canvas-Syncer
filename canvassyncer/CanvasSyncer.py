@@ -62,6 +62,26 @@ class CanvasSyncer:
             count += len(filesDict[courseID])
         return count
 
+    
+    def formatSJTUSyleCourseCode(self, courseCode: str) -> str:
+        """
+        Extracts and returns the first substring from the given course code that matches the pattern of 
+        one or more lowercase letters followed by one or more digits (e.g., 'math1560'). If no such 
+        pattern is found, returns the original course code.
+
+        Args:
+            courseCode (str): The course code string to be formatted. Must be lowercase.
+
+        Returns:
+            str: The formatted course code matching the specified pattern, or the original course code if no match is found.
+        """
+        pattern = r"[a-z]+[0-9]+"
+        match = re.findall(pattern, courseCode)
+        if match:
+            return match[0]
+        else:
+            return courseCode
+
     async def getCourseID(self):
         coros = []
         if self.config.get("courseCodes"):
@@ -76,6 +96,16 @@ class CanvasSyncer:
             if courseCode[-1] == "J" or courseCode[-1] == "j":
                 courseCode = courseCode[:-1]
             lowerCourseCodes.append(courseCode.replace(" ", "").lower())
+
+        # BUG two courses with same code but different IDs will be overwritten
+
+        # tmp_courseCode = await self.dictFromPages(
+        #     self.getCourseIdByCourseCodeHelper, lowerCourseCodes
+        # )
+        # print("Found these course IDs by course codes in this page:")
+        # for courseID, courseCode in tmp_courseCode.items():
+        #     self.courseCode[int(courseID)] = courseCode
+        #     print(f"\tGet course ID: {courseID} from course code: {courseCode}")
         self.courseCode.update(
             await self.dictFromPages(
                 self.getCourseIdByCourseCodeHelper, lowerCourseCodes
@@ -83,21 +113,13 @@ class CanvasSyncer:
         )
         if lowerCourseCodes:
             for courseCode in lowerCourseCodes:
-                print(f"\t Cannot find course ID for course: {courseCode}")
+                print(f"\tCannot find course ID for course: {courseCode}")
 
     # def ifCourseCodeExists(self, code, lookUpList):
     #     for course in lookUpList:
     #         if course in code:
     #             return (True, course)
     #     return False
-
-    def formatSJTUSyleCourseCode(self, courseCode):
-        pattern = r"[a-z]+[0-9]+"
-        match = re.findall(pattern, courseCode)
-        if match:
-            return match[0]
-        else:
-            return courseCode
 
     async def getCourseIdByCourseCodeHelper(self, page, lowerCourseCodes):
         res = {}
@@ -133,12 +155,9 @@ class CanvasSyncer:
         if clientRes.get("course_code") is None:
             print(f"\t Cannot get course code from course ID: {courseID}")
             return
-        self.courseCode[int(courseID)] = self.formatSJTUSyleCourseCode(
-            clientRes["course_code"]
-        )
-        print(
-            f"\t Get course code: {clientRes['course_code']} from course ID: {courseID}"
-        )
+        formatted_code = self.formatSJTUSyleCourseCode(clientRes["course_code"].lower()).upper()
+        self.courseCode[int(courseID)] = (formatted_code)
+        print(f"\tGet course code: {formatted_code} from course ID: {courseID}")
 
     def pathTooLong(self, path, max_length=WINDOWS_PATH_MAX_LENGTH):
         return len(path) > max_length - len(self.downloadDir) - PATH_LENGTH_TOLERANCE
@@ -256,19 +275,6 @@ class CanvasSyncer:
                 "size": file_size,
             }
         return files
-
-    def checkNewFiles(self):
-        if self.skipFiles:
-            print(
-                "These file(s) will not be synced due to their size"
-                + f" (over {self.config['filesizeThresh']} MB):"
-            )
-            for f in self.skipFiles:
-                print(f)
-        if self.newFiles:
-            print(f"Ready to download {len(self.newInfo)} file(s).")
-            for s in self.newInfo:
-                print(s)
 
     def compareExistingFiles(self):
         if not self.laterFiles:
@@ -437,14 +443,18 @@ class CanvasSyncer:
                                     else:
                                         print("Please input 'r' or 'd'.")
                                         continue
-                            if (
-                                online_file_info["modified_time"]
-                                > online_file_info["created_time"]
-                            ):
-                                self.laterFiles[courseID][file_name] = online_file_info
+                            else:
+                                if (
+                                    online_file_info["modified_time"]
+                                    > online_file_info["created_time"]
+                                ):
+                                    self.laterFiles[courseID][
+                                        file_name
+                                    ] = online_file_info
                         else:
                             self.newFiles[courseID][file_name] = online_file_info
                     else:
+                        # 非 Windows 系统的处理
                         if file_name in self.localFiles[courseID]:
                             if (
                                 online_file_info["modified_time"]
@@ -453,6 +463,25 @@ class CanvasSyncer:
                                 self.laterFiles[courseID][file_name] = online_file_info
                         else:
                             self.newFiles[courseID][file_name] = online_file_info
+            if courseID == 68628:
+                # Special case for course 68628: print all files in each category
+                print(f"\nCourse {self.courseCode[courseID]} files:")
+                print("New files:")
+                for file_name, file_info in self.newFiles[courseID].items():
+                    print(f"\t{file_name} ({file_info['size'] / 1024 / 1024:.2f} MB)")
+                print("Later files:")
+                for file_name, file_info in self.laterFiles[courseID].items():
+                    print(
+                        f"\t{file_name} (Modified at: {datetime.fromtimestamp(file_info['modified_time']).strftime('%Y-%m-%d %H:%M:%S')}, Size: {file_info['size'] / 1024 / 1024:.2f} MB)"
+                    )
+                print("Over-sized files:")
+                for file_name, file_info in self.overSizedFiles.get(
+                    courseID, {}
+                ).items():
+                    print(
+                        f"\t{file_name} (Size: {file_info['size'] / 1024 / 1024:.2f} MB)"
+                    )
+                print("")
 
     def checkFileSize(self):
         for courseID in self.courseCode:
@@ -502,7 +531,7 @@ class CanvasSyncer:
                             .replace("//", "/")
                         )
                         try:
-                            # 修改文件的创建时间和修改时间
+                            # 修改文件的创建时间、访问时间和修改时间
                             handle = win32file.CreateFile(
                                 abs_file_path,
                                 win32con.GENERIC_WRITE,
@@ -512,16 +541,20 @@ class CanvasSyncer:
                                 win32con.FILE_ATTRIBUTE_NORMAL,
                                 None,
                             )
-                            new_time = pywintypes.Time(file_info["modified_time"])
-                            win32file.SetFileTime(handle, new_time, None, None)
-                            handle.close()
-                            os.utime(
-                                abs_file_path,
-                                (
-                                    file_info["modified_time"],
-                                    file_info["modified_time"],
-                                ),
-                            )
+                            try:
+                                # 将在线文件的时间设置为创建时间和修改时间
+                                creation_time = pywintypes.Time(
+                                    file_info["created_time"]
+                                )
+                                modified_time = pywintypes.Time(
+                                    file_info["modified_time"]
+                                )
+                                # SetFileTime(handle, creation_time, access_time, modified_time)
+                                win32file.SetFileTime(
+                                    handle, creation_time, modified_time, modified_time
+                                )
+                            finally:
+                                handle.close()
                         except Exception as e:
                             print(f"Error: {e}")
 
@@ -600,6 +633,16 @@ class CanvasSyncer:
         self.categorizeFiles()
         self.compareExistingFiles()
         self.prepareDownload()
+
+        # # print new files
+        # if self.newFiles:
+        #     print(f"Found {self.countFiles(self.newFiles)} new files:")
+        #     for courseID in self.newFiles:
+        #         if self.newFiles[courseID]:
+        #             for file_name in self.newFiles[courseID]:
+        #                 print(f"\t{self.courseCode[courseID]}{file_name}")
+        # else:
+        #     print("No new files found.")
 
         if not self.downloadSize:
             return print("All local files are synced!")

@@ -16,6 +16,7 @@ CONFIG_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), ".canvassyncer.json"
 )
 
+
 def initConfig():
     oldConfig = {}
     if os.path.exists(CONFIG_PATH):
@@ -54,7 +55,8 @@ def initConfig():
     )
     token = promptConfigStr("Canvas access token", "token")
     courseCodesStr = promptConfigStr(
-        "Courses to sync in course codes(split with space). Use new 4-digit code format, ignore lagging J.", "courseCodes"
+        "Courses to sync in course codes(split with space). Use new 4-digit code format, ignore lagging J.",
+        "courseCodes",
     )
     courseCodes = courseCodesStr.split()
     courseIDsStr = promptConfigStr(
@@ -100,7 +102,7 @@ def initConfig():
         "allowAudio": allowAudio,
         "allowVideo": allowVideo,
         "allowImage": allowImage,
-        "keep_older_version": keepOlderVersion
+        "keep_older_version": keepOlderVersion,
     }
 
 
@@ -129,8 +131,13 @@ def getConfig():
         "-d", "--debug", help="show debug information", action="store_true"
     )
     parser.add_argument(
-        "--no-keep-older-version",
-        help="do not keep older version",
+        "--keep-older-version",
+        help="keep older version",
+        action="store_true",
+    )
+    parser.add_argument(
+        "--choose-newer-course",
+        help="choose newer course when there are multiple courses with the same code",
         action="store_true",
     )
     args = parser.parse_args()
@@ -161,14 +168,17 @@ def getConfig():
         config["allowVideo"] = True
     if not "allowImage" in config:
         config["allowImage"] = True
-    if not "keepOlderVersion" in config:
-        config["no_keep_older_version"] = args.no_keep_older_version
+    if not "keep_older_version" in config:
+        config["keep_older_version"] = args.keep_older_version
+    if not "choose_newer_course" in config:
+        config["choose_newer_course"] = args.choose_newer_course
 
     return config
 
 
 async def sync():
     syncer = None
+    config = None
     try:
         config = getConfig()
         while True:
@@ -188,12 +198,16 @@ async def sync():
         raise e
     except Exception as e:
         errorName = e.__class__.__name__
-        print(
-            f"Unexpected error: {errorName}. Please check your network and token!"
-            + ("" if config["debug"] else " Or use -d for detailed information.")
-        )
-        if config["debug"]:
+        if config is None:
+            print("Error: Failed to load config file.")
+        elif config["debug"]:
             print(traceback.format_exc())
+        else:
+            print(
+                f"Unexpected error: {errorName}. Please check your network and token!"
+                + ("" if config["debug"] else " Or use -d for detailed information.")
+            )
+
     finally:
         if syncer:
             await syncer.aclose()
