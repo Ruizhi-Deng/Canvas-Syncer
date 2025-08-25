@@ -11,7 +11,7 @@ class AsyncSemClient:
     def __init__(self, connectionCount, token, proxy):
         self.sem = asyncio.Semaphore(connectionCount)
         self.client = httpx.AsyncClient(
-            timeout=10,
+            timeout=100000,
             headers={
                 "Authorization": f"Bearer {token}",
                 # "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36",

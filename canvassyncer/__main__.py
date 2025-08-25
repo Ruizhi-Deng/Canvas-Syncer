@@ -172,6 +172,8 @@ def getConfig():
         config["keep_older_version"] = args.keep_older_version
     if not "choose_newer_course" in config:
         config["choose_newer_course"] = args.choose_newer_course
+    if not "course_code_pattern" in config:
+        config["course_code_pattern"] = ""
 
     return config
 

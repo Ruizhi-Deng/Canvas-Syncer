@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from AsyncSemClient import AsyncSemClient
 
 
-PAGES_PER_TIME = 8
+PAGES_PER_TIME = 4
 FIND_COURSE_RETRY_TIMES = 3
 WINDOWS_PATH_MAX_LENGTH = 260
 PATH_LENGTH_TOLERANCE = 10
@@ -24,6 +24,8 @@ class CanvasSyncer:
         self.downloadDir = self.config["downloadDir"]
 
         self.folders = {}
+
+        self.course_code_pattern = self.config["course_code_pattern"]
 
         # FILE DICTIONARY: 2-stage dict
         # {courseID:{relative_file_path (to course root):{"name":<str> (localFiles Only), "url":<str> (not for localFiles), size:<int>, modified_date:<int>}}}
@@ -46,12 +48,13 @@ class CanvasSyncer:
         page = 1
         endOfPage = False
         while not endOfPage:
+            endOfPage = True
             pageRes = await asyncio.gather(
                 *[helperFunc(page + i, *args, **kwargs) for i in range(PAGES_PER_TIME)]
             )
             for item in pageRes:
-                if not item:
-                    endOfPage = True
+                if item:
+                    endOfPage = False
                 res.update(item)
             page += PAGES_PER_TIME
         return res
@@ -62,20 +65,20 @@ class CanvasSyncer:
             count += len(filesDict[courseID])
         return count
 
-    
-    def formatSJTUSyleCourseCode(self, courseCode: str) -> str:
+    def courseCodeFormatter(self, courseCode: str, pattern: str) -> str:
         """
-        Extracts and returns the first substring from the given course code that matches the pattern of 
-        one or more lowercase letters followed by one or more digits (e.g., 'math1560'). If no such 
-        pattern is found, returns the original course code.
+        Format a course code string to match a specified pattern.
 
         Args:
             courseCode (str): The course code string to be formatted. Must be lowercase.
+            pattern (str): The regex pattern to match the desired course code format.
 
         Returns:
-            str: The formatted course code matching the specified pattern, or the original course code if no match is found.
+            str: The formatted course code if a match is found; otherwise, returns the original course code. If pattern is empty, returns the original course code.
         """
-        pattern = r"[a-z]+[0-9]+"
+        if not pattern:
+            print("WARNING: course_code_pattern is empty. No changes were made.")
+            return courseCode
         match = re.findall(pattern, courseCode)
         if match:
             return match[0]
@@ -131,7 +134,7 @@ class CanvasSyncer:
             return res
         for course in courses:
             unformattedCourseCode = course.get("course_code", "").lower()
-            courseCode = self.formatSJTUSyleCourseCode(unformattedCourseCode)
+            courseCode = self.courseCodeFormatter(unformattedCourseCode, self.course_code_pattern)
             if courseCode in lowerCourseCodes:
                 lowerCourseCodes.remove(courseCode)
                 courseCode = courseCode.upper()
@@ -155,7 +158,7 @@ class CanvasSyncer:
         if clientRes.get("course_code") is None:
             print(f"\t Cannot get course code from course ID: {courseID}")
             return
-        formatted_code = self.formatSJTUSyleCourseCode(clientRes["course_code"].lower()).upper()
+        formatted_code = self.courseCodeFormatter(clientRes["course_code"].lower(), self.course_code_pattern).upper()
         self.courseCode[int(courseID)] = (formatted_code)
         print(f"\tGet course code: {formatted_code} from course ID: {courseID}")
 
@@ -274,6 +277,7 @@ class CanvasSyncer:
                 "modified_time": int(modifiedTimeStamp),
                 "size": file_size,
             }
+            # print("Page " + str(page) + ": Found file: " + path)
         return files
 
     def compareExistingFiles(self):
@@ -607,6 +611,35 @@ class CanvasSyncer:
                 exit()
 
         print(f"Get {len(self.courseCode)} available courses.\n")
+
+        # download page contents https://umich.instructure.com/api/v1/courses/788426/folders?page=1 - end of pages and saved in a file
+        # Download all pages of folders for course 788426 and save to a file
+        # course_id = 788426
+        # all_files = []
+        # page = 1
+        # while True:
+        #     url = f"https://umich.instructure.com/api/v1/courses/{course_id}/files?page={page}"
+        #     try:
+        #         page_res = await self.client.json(url, debug=True)
+        #         if not page_res or not isinstance(page_res, list):
+        #             break
+        #         all_files.extend("===== Page" + str(page) + " =====")
+        #         all_files.extend(page_res)
+        #         if len(page_res) == 0:
+        #             break
+        #         page += 1
+        #     except Exception as e:
+        #         print(f"Error downloading files for course {course_id} page {page}: {e}")
+        #         break
+        # # Save all folders to a file
+        # output_path = os.path.join(self.downloadDir, f"{course_id}files.json")
+        # import json
+        # try:
+        #     with open(output_path, "w", encoding="utf-8") as f:
+        #         json.dump(all_files, f, ensure_ascii=False, indent=2)
+        #     print(f"Saved all files for course {course_id} to {output_path}")
+        # except Exception as e:
+        #     print(f"Error saving files to file: {e}")
 
         # Get files
         print("Finding files on canvas...")
